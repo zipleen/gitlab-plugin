@@ -9,6 +9,8 @@ import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.ParametersAction;
 import hudson.model.StringParameterValue;
+import hudson.model.Action;
+import hudson.model.HealthReportingAction;
 import hudson.plugins.git.Branch;
 import hudson.plugins.git.GitSCM;
 import hudson.plugins.git.util.Build;
@@ -222,7 +224,16 @@ public class GitLabWebHook implements UnprotectedRootAction {
         } else {
             object.put("status", "failed");
         }
-        
+
+        List<Action> buildActions = (List<Action>) mainBuild.getAllActions();
+        for(Action buildAction : buildActions) {
+            if (buildAction instanceof HealthReportingAction && buildAction.getClass().getSimpleName().equalsIgnoreCase("CoberturaBuildAction")) {
+                HealthReportingAction healthReportingAction = (HealthReportingAction) buildAction;
+                object.put("coverage", healthReportingAction.getBuildHealth().getScore());
+                break;
+            }
+        }
+
         try {
             this.writeJSON(rsp, object);
         } catch (IOException e) {
