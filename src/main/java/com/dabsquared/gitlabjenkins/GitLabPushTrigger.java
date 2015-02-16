@@ -244,6 +244,15 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
             String buildUrl = Jenkins.getInstance().getRootUrl() + abstractBuild.getUrl();
             msg.append("\n\nResults available at: ")
                     .append("[").append("Jenkins").append("](").append(buildUrl).append(")");
+
+            List<Action> buildActions = (List<Action>) abstractBuild.getAllActions();
+            for(Action buildAction : buildActions) {
+                if (buildAction instanceof HealthReportingAction) {
+                    HealthReportingAction healthReportingAction = (HealthReportingAction) buildAction;
+                    msg.append("\n\n" + healthReportingAction.getBuildHealth().getLocalizableDescription());
+                }
+            }
+
             try {
                 GitlabProject proj = new GitlabProject();
                 proj.setId(cause.getMergeRequest().getObjectAttribute().getTargetProjectId());
