@@ -245,12 +245,17 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
             msg.append("\n\nResults available at: ")
                     .append("[").append("Jenkins").append("](").append(buildUrl).append(")");
 
-            List<Action> buildActions = (List<Action>) abstractBuild.getAllActions();
-            for(Action buildAction : buildActions) {
-                if (buildAction instanceof HealthReportingAction) {
-                    HealthReportingAction healthReportingAction = (HealthReportingAction) buildAction;
-                    msg.append("\n\n" + healthReportingAction.getBuildHealth().getLocalizableDescription());
+            try {
+                List<Action> buildActions = (List<Action>) abstractBuild.getAllActions();
+                for (Action buildAction : buildActions) {
+                    if (buildAction instanceof HealthReportingAction) {
+                        HealthReportingAction healthReportingAction = (HealthReportingAction) buildAction;
+                        msg.append("\n\n" + healthReportingAction.getBuildHealth()
+                            .getLocalizableDescription());
+                    }
                 }
+            } catch (Exception e) {
+
             }
 
             try {
