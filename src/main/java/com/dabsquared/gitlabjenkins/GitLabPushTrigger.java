@@ -13,6 +13,7 @@ import hudson.util.SequentialExecutionQueue;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -258,6 +259,18 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
                         msg.append("\n\n" + healthReportingAction.getBuildHealth()
                             .getLocalizableDescription());
                     }
+                    try {
+                        if (buildAction.getClass().getName().equals("hudson.plugins.cobertura.CoberturaBuildAction")) {
+                            Method method = buildAction.getClass().getMethod("getResults");
+                            Object returnValue = method.invoke(buildAction);
+
+                            msg.append("\n\nCobertura Full Report: " + returnValue);
+
+                        }
+                    } catch (NoSuchMethodException ex) {
+
+                    }
+
                 }
             } catch (Exception e) {
 
