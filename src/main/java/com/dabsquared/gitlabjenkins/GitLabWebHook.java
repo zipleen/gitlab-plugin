@@ -46,12 +46,15 @@ import org.acegisecurity.Authentication;
 import org.acegisecurity.context.SecurityContextHolder;
 import org.apache.commons.io.IOUtils;
 import org.eclipse.jgit.lib.ObjectId;
+import org.gitlab.api.models.GitlabMergeRequest;
+import org.gitlab.api.models.GitlabProject;
 import org.kohsuke.stapler.StaplerRequest;
 import org.kohsuke.stapler.StaplerResponse;
 
 import com.dabsquared.gitlabjenkins.GitLabMergeRequest;
 import com.dabsquared.gitlabjenkins.GitLabPushRequest;
 import com.dabsquared.gitlabjenkins.GitLabPushTrigger;
+import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
 
 /**
@@ -79,7 +82,7 @@ public class GitLabWebHook implements UnprotectedRootAction {
     }
 
     public void getDynamic(final String projectName, final StaplerRequest req, StaplerResponse res) {
-        LOGGER.log(Level.WARNING, "WebHook called.");
+        LOGGER.log(Level.INFO, "WebHook called with url: {0}", req.getRestOfPath());
         final Iterator<String> restOfPathParts = Splitter.on('/').omitEmptyStrings().split(req.getRestOfPath()).iterator();
         final AbstractProject<?, ?>[] projectHolder = new AbstractProject<?, ?>[] { null };
         ACL.impersonate(ACL.SYSTEM, new Runnable() {
@@ -109,6 +112,25 @@ public class GitLabWebHook implements UnprotectedRootAction {
             paths.add(restOfPathParts.next());
         }
         
+        /*
+         * Since GitLab 7.10 the URL contains the pushed branch name.
+         * Extract and store the branch name for further processing.
+         * http://jenkins.host.com/project/<ProjectName>/refs/<branchName>/commit/<SHA1>
+         */
+        String sourceBranch = null;
+        if (!paths.isEmpty() && paths.get(0).equals("refs")) {
+            int index = paths.lastIndexOf("commits");
+            if (index == -1)
+                index = paths.lastIndexOf("builds");
+            if (index == -1)
+                index = paths.lastIndexOf("!builds");
+            
+            if (index > 1) {
+                sourceBranch = Joiner.on('/').join(paths.subList(1, index)); // extract branch
+                paths.subList(0, index).clear(); // remove 'refs/<branchName>'
+            }
+        }
+
         String token = req.getParameter("token");
 
         //TODO: Check token authentication with project id. For now we are not using this.
@@ -347,6 +369,14 @@ public class GitLabWebHook implements UnprotectedRootAction {
             if (trigger == null) {
                 return;
             }
+
+            if(trigger.getCiSkip() && request.getLastCommit() != null) {
+                if(request.getLastCommit().getMessage().contains("[ci-skip]")) {
+                    LOGGER.log(Level.INFO, "Skipping due to ci-skip.");
+                    return;
+                }
+            }
+
             trigger.onPost(request);
 
             if (trigger.getTriggerOpenMergeRequestOnPush()) {
@@ -361,9 +391,12 @@ public class GitLabWebHook implements UnprotectedRootAction {
 	protected void buildOpenMergeRequests(GitLabPushTrigger trigger, Integer projectId, String projectRef) {
 		try {
 			GitLab api = new GitLab();
-			List<org.gitlab.api.models.GitlabMergeRequest> reqs = api.instance().getMergeRequests(projectId);
-			for (org.gitlab.api.models.GitlabMergeRequest mr : reqs) {
-				if (!mr.isClosed() && !mr.isMerged()&& projectRef.endsWith(mr.getSourceBranch())) {
+			// TODO Replace this with a call to GitlabAPI.getOpenMergeRequests, once timols has deployed version 1.1.7
+			String tailUrl = GitlabProject.URL + "/" + projectId + GitlabMergeRequest.URL + "?state=opened&per_page=100";
+			List<GitlabMergeRequest> mergeRequests = api.instance().retrieve().getAll(tailUrl, GitlabMergeRequest[].class);
+
+			for (org.gitlab.api.models.GitlabMergeRequest mr : mergeRequests) {
+				if (projectRef.endsWith(mr.getSourceBranch())) {
 					LOGGER.log(Level.FINE,
 							"Generating new merge trigger from "
 									+ mr.toString() + "\n source: "

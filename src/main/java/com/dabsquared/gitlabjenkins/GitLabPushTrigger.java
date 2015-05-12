@@ -2,7 +2,17 @@ package com.dabsquared.gitlabjenkins;
 
 import hudson.Extension;
 import hudson.Util;
-import hudson.model.*;
+import hudson.model.Action;
+import hudson.model.Item;
+import hudson.model.ParameterValue;
+import hudson.model.Result;
+import hudson.model.AbstractBuild;
+import hudson.model.AbstractProject;
+import hudson.model.Cause;
+import hudson.model.ParameterDefinition;
+import hudson.model.ParametersAction;
+import hudson.model.ParametersDefinitionProperty;
+import hudson.model.StringParameterValue;
 import hudson.plugins.git.RevisionParameterAction;
 import hudson.plugins.git.GitSCM;
 import hudson.scm.SCM;
@@ -42,8 +52,10 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
 	private boolean triggerOnPush = true;
     private boolean triggerOnMergeRequest = true;
     private boolean triggerOpenMergeRequestOnPush = true;
+    private boolean ciSkip = true;
     private boolean setBuildDescription = true;
     private boolean addNoteOnMergeRequest = true;
+    private boolean addVoteOnMergeRequest = true;
     private boolean allowAllBranches = false;
 
     private List<String> allowedBranches;
@@ -57,11 +69,14 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
     }
 
     @DataBoundConstructor
-    public GitLabPushTrigger(boolean triggerOnPush, boolean triggerOnMergeRequest, boolean triggerOpenMergeRequestOnPush, boolean setBuildDescription, boolean allowAllBranches, List<String> allowedBranches) {
+    public GitLabPushTrigger(boolean triggerOnPush, boolean triggerOnMergeRequest, boolean triggerOpenMergeRequestOnPush, boolean ciSkip, boolean setBuildDescription, boolean addNoteOnMergeRequest, boolean addVoteOnMergeRequest, boolean allowAllBranches, List<String> allowedBranches) {
         this.triggerOnPush = triggerOnPush;
         this.triggerOnMergeRequest = triggerOnMergeRequest;
         this.triggerOpenMergeRequestOnPush = triggerOpenMergeRequestOnPush;
+        this.ciSkip = ciSkip;
         this.setBuildDescription = setBuildDescription;
+	this.addNoteOnMergeRequest = addNoteOnMergeRequest;
+        this.addVoteOnMergeRequest = addVoteOnMergeRequest;
         this.allowAllBranches = allowAllBranches;
         this.allowedBranches = allowedBranches;
     }
@@ -85,6 +100,18 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
     public boolean getAddNoteOnMergeRequest() {
         return addNoteOnMergeRequest;
     }
+    
+    public boolean getAddVoteOnMergeRequest() {
+        return addVoteOnMergeRequest;
+    }
+
+    public boolean getAllowAllBranches() {
+        return allowAllBranches;
+    }
+
+    public boolean getCiSkip() {
+        return ciSkip;
+    }
 
     public List<String> getAllowedBranches() {
     	return allowedBranches;
@@ -97,6 +124,7 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
 
                 public void run() {
             		LOGGER.log(Level.INFO, "{0} triggered for push.", job.getName());
+
             		String name = " #" + job.getNextBuildNumber();
             		GitLabPushCause cause = createGitLabPushCause(req);
             		Action[] actions = createActions(req);
@@ -109,7 +137,12 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
 
                 private GitLabPushCause createGitLabPushCause(GitLabPushRequest req) {
                     GitLabPushCause cause;
-                    String triggeredByUser = req.getCommits().get(0).getAuthor().getName();
+                    String triggeredByUser;
+                    if (req.getCommits().size() > 0){
+                        triggeredByUser = req.getCommits().get(0).getAuthor().getName();
+                    } else {
+                        triggeredByUser = req.getUser_name();
+                    }
                     try {
                         cause = new GitLabPushCause(triggeredByUser, getLogFile());
                     } catch (IOException ex) {
@@ -125,12 +158,12 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
 
                     LOGGER.log(Level.INFO, "GitLab Push Request from branch {0}.", branch);
 
-                    Map<String, ParameterValue> values = new HashMap<String, ParameterValue>();
+                    Map<String, ParameterValue> values = getDefaultParameters();
                     values.put("gitlabSourceBranch", new StringParameterValue("gitlabSourceBranch", branch));
                     values.put("gitlabTargetBranch", new StringParameterValue("gitlabTargetBranch", branch));
                     values.put("gitlabBranch", new StringParameterValue("gitlabBranch", branch));
-                    
-                    LOGGER.log(Level.INFO, "Trying to get name and URL for job: {0} using project {1} (push)", new String[]{job.getName(), getDesc().project.getName()});
+
+                    LOGGER.log(Level.INFO, "Trying to get name and URL for job: {0} using project {1} (push)", new String[]{job.getName(), job.getRootProject().getName()});
                     values.put("gitlabSourceRepoName", new StringParameterValue("gitlabSourceRepoName", getDesc().getSourceRepoNameDefault(job)));
                 	values.put("gitlabSourceRepoURL", new StringParameterValue("gitlabSourceRepoURL", getDesc().getSourceRepoURLDefault(job).toString()));
                 	
@@ -138,8 +171,19 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
 
                     ParametersAction parametersAction = new ParametersAction(listValues);
                     actions.add(parametersAction);
+                    RevisionParameterAction revision;
 
-                    RevisionParameterAction revision = new RevisionParameterAction(req.getLastCommit().getId());
+                    if (req.getLastCommit() !=null) {
+                        revision = new RevisionParameterAction(req.getLastCommit().getId());
+                    }else{
+                        if (req.getCheckout_sha().contains("0000000000000000000000000000000000000000") ){
+                            // no commit and no checkout sha, a Tag was deleted, so no build need to be triggered
+                            LOGGER.log(Level.INFO, "GitLab Push {0} has been deleted, skip build .", req.getRef());
+                            return null;
+                        }
+                        revision = new RevisionParameterAction(req.getCheckout_sha());
+                    }
+
                     actions.add(revision);
                     Action[] actionsArray = actions.toArray(new Action[0]);
 
@@ -177,7 +221,7 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
                 private Action[] createActions(GitLabMergeRequest req) {
                     List<Action> actions = new ArrayList<Action>();
 
-                    Map<String, ParameterValue> values = new HashMap<String, ParameterValue>();
+                    Map<String, ParameterValue> values = getDefaultParameters();
                     values.put("gitlabSourceBranch", new StringParameterValue("gitlabSourceBranch", getSourceBranch(req)));
                     values.put("gitlabTargetBranch", new StringParameterValue("gitlabTargetBranch", req.getObjectAttribute().getTargetBranch()));
                     
@@ -212,6 +256,19 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
             });	
     	}
     }
+    
+    private Map<String, ParameterValue> getDefaultParameters() {
+        Map<String, ParameterValue> values = new HashMap<String, ParameterValue>();
+        ParametersDefinitionProperty definitionProperty = job.getProperty(ParametersDefinitionProperty.class);
+
+        if (definitionProperty != null) {
+            for (ParameterDefinition definition : definitionProperty.getParameterDefinitions()) {
+                values.put(definition.getName(), definition.getDefaultParameterValue());
+            }
+        }
+
+        return values;
+    }
 
     private void setBuildCauseInJob(AbstractBuild abstractBuild){
         if(setBuildDescription){
@@ -242,9 +299,11 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
         if(addNoteOnMergeRequest) {
             StringBuilder msg = new StringBuilder();
             if (abstractBuild.getResult() == Result.SUCCESS) {
-                msg.append(":white_check_mark:");
+                String icon = addVoteOnMergeRequest ? ":+1:" : ":white_check_mark:";
+                msg.append(icon);
             } else {
-                msg.append(":anguished:");
+                String icon = addVoteOnMergeRequest ? ":-1:" : ":anguished:";
+                msg.append(icon);
             }
             msg.append(" Jenkins Build ").append(abstractBuild.getResult().color.getDescription());
             String buildUrl = Jenkins.getInstance().getRootUrl() + abstractBuild.getUrl();
