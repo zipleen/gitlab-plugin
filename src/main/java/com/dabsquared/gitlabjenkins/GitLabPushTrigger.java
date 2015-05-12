@@ -2,17 +2,7 @@ package com.dabsquared.gitlabjenkins;
 
 import hudson.Extension;
 import hudson.Util;
-import hudson.model.Action;
-import hudson.model.Item;
-import hudson.model.ParameterValue;
-import hudson.model.Result;
-import hudson.model.AbstractBuild;
-import hudson.model.AbstractProject;
-import hudson.model.Cause;
-import hudson.model.ParameterDefinition;
-import hudson.model.ParametersAction;
-import hudson.model.ParametersDefinitionProperty;
-import hudson.model.StringParameterValue;
+import hudson.model.*;
 import hudson.plugins.git.RevisionParameterAction;
 import hudson.plugins.git.GitSCM;
 import hudson.scm.SCM;
@@ -222,10 +212,13 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
                     List<Action> actions = new ArrayList<Action>();
 
                     Map<String, ParameterValue> values = getDefaultParameters();
-                    values.put("gitlabSourceBranch", new StringParameterValue("gitlabSourceBranch", getSourceBranch(req)));
+                    values.put("gitlabSourceBranch",
+                        new StringParameterValue("gitlabSourceBranch", getSourceBranch(req)));
                     values.put("gitlabTargetBranch", new StringParameterValue("gitlabTargetBranch", req.getObjectAttribute().getTargetBranch()));
                     
-                    LOGGER.log(Level.INFO, "Trying to get name and URL for job: {0} using project {1}", new String[]{job.getName(), getDesc().project.getName()});
+                    LOGGER.log(Level.INFO,
+                        "Trying to get name and URL for job: {0} using project {1}",
+                        new String[] {job.getName(), getDesc().project.getName()});
                     String sourceRepoName = getDesc().getSourceRepoNameDefault(job);
                     String sourceRepoURL = getDesc().getSourceRepoURLDefault(job).toString();
                     
@@ -240,7 +233,8 @@ public class GitLabPushTrigger extends Trigger<AbstractProject<?, ?>> {
                     }
                     
                     values.put("gitlabSourceRepoName", new StringParameterValue("gitlabSourceRepoName", sourceRepoName));
-                	values.put("gitlabSourceRepoURL", new StringParameterValue("gitlabSourceRepoURL", sourceRepoURL));
+                	values.put("gitlabSourceRepoURL",
+                      new StringParameterValue("gitlabSourceRepoURL", sourceRepoURL));
 
                     List<ParameterValue> listValues = new ArrayList<ParameterValue>(values.values());
 
