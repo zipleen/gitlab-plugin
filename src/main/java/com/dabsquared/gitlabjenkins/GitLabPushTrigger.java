@@ -15,6 +15,7 @@ import hudson.model.ParametersAction;
 import hudson.model.ParametersDefinitionProperty;
 import hudson.model.Run;
 import hudson.model.StringParameterValue;
+import hudson.model.*;
 import hudson.plugins.git.RevisionParameterAction;
 import hudson.plugins.git.GitSCM;
 import hudson.scm.SCM;
@@ -28,6 +29,7 @@ import hudson.util.ListBoxModel.Option;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -360,7 +362,8 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
                     List<Action> actions = new ArrayList<Action>();
 
                     Map<String, ParameterValue> values = getDefaultParameters();
-                    values.put("gitlabSourceBranch", new StringParameterValue("gitlabSourceBranch", getSourceBranch(req)));
+                    values.put("gitlabSourceBranch",
+                        new StringParameterValue("gitlabSourceBranch", getSourceBranch(req)));
                     values.put("gitlabTargetBranch", new StringParameterValue("gitlabTargetBranch", req.getObjectAttribute().getTargetBranch()));
                     values.put("gitlabActionType", new StringParameterValue("gitlabActionType", "MERGE"));
                     if (req.getObjectAttribute().getAuthor() != null) {
@@ -373,8 +376,8 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
                         values.put("gitlabMergeRequestAssignee", new StringParameterValue("gitlabMergeRequestAssignee", req.getObjectAttribute().getAssignee().getName()));
                     }
 
-
                     LOGGER.log(Level.INFO, "Trying to get name and URL for job: {0}", job.getName());
+
                     String sourceRepoName = getDesc().getSourceRepoNameDefault(job);
                     String sourceRepoURL = getDesc().getSourceRepoURLDefault(job).toString();
 
@@ -389,7 +392,8 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
                     }
 
                     values.put("gitlabSourceRepoName", new StringParameterValue("gitlabSourceRepoName", sourceRepoName));
-                	values.put("gitlabSourceRepoURL", new StringParameterValue("gitlabSourceRepoURL", sourceRepoURL));
+                	values.put("gitlabSourceRepoURL",
+                      new StringParameterValue("gitlabSourceRepoURL", sourceRepoURL));
 
                     List<ParameterValue> listValues = new ArrayList<ParameterValue>(values.values());
 
@@ -481,6 +485,32 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
             String buildUrl = Jenkins.getInstance().getRootUrl() + run.getUrl();
             msg.append("\n\nResults available at: ")
                     .append("[").append("Jenkins " + buildUrl).append("](").append(buildUrl).append(")");
+
+            try {
+                List<Action> buildActions = (List<Action>) abstractBuild.getAllActions();
+                for (Action buildAction : buildActions) {
+                    if (buildAction instanceof HealthReportingAction) {
+                        HealthReportingAction healthReportingAction = (HealthReportingAction) buildAction;
+                        msg.append("\n\n" + healthReportingAction.getBuildHealth()
+                            .getLocalizableDescription());
+                    }
+                    try {
+                        if (buildAction.getClass().getName().equals("hudson.plugins.cobertura.CoberturaBuildAction")) {
+                            Method method = buildAction.getClass().getMethod("getResults");
+                            Object returnValue = method.invoke(buildAction);
+
+                            msg.append("\n\nCobertura Full Report: " + returnValue);
+
+                        }
+                    } catch (NoSuchMethodException ex) {
+
+                    }
+
+                }
+            } catch (Exception e) {
+
+            }
+
             try {
                 GitlabProject proj = new GitlabProject();
                 proj.setId(cause.getMergeRequest().getObjectAttribute().getTargetProjectId());
