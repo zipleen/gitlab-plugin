@@ -1,7 +1,9 @@
 package com.dabsquared.gitlabjenkins;
 
-import com.dabsquared.gitlabjenkins.GitLabMergeRequest.LastCommit;
-
+import com.dabsquared.gitlabjenkins.data.LastCommit;
+import com.dabsquared.gitlabjenkins.data.ObjectAttributes;
+import com.google.common.base.Joiner;
+import com.google.common.base.Splitter;
 import hudson.Extension;
 
 import hudson.model.*;
@@ -27,31 +29,11 @@ import hudson.security.csrf.CrumbExclusion;
 import hudson.triggers.Trigger;
 import hudson.util.HttpResponses;
 import hudson.util.RunList;
-
-import java.io.File;
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.io.StringWriter;
-import java.net.URL;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Iterator;
-import java.util.List;
-import java.util.ListIterator;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-
-import javax.servlet.FilterChain;
-import javax.servlet.ServletException;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-
 import jenkins.model.Jenkins;
-import net.sf.json.JSONObject;
+import jenkins.model.ParameterizedJobMixIn;
 import jenkins.triggers.SCMTriggerItem;
 import jenkins.triggers.SCMTriggerItem.SCMTriggerItems;
-import jenkins.model.ParameterizedJobMixIn;
-
+import net.sf.json.JSONObject;
 import org.acegisecurity.Authentication;
 import org.acegisecurity.context.SecurityContextHolder;
 import org.apache.commons.io.IOUtils;
@@ -64,11 +46,20 @@ import org.gitlab.api.models.GitlabProject;
 import org.kohsuke.stapler.StaplerRequest;
 import org.kohsuke.stapler.StaplerResponse;
 
-import com.dabsquared.gitlabjenkins.GitLabMergeRequest;
-import com.dabsquared.gitlabjenkins.GitLabPushRequest;
-import com.dabsquared.gitlabjenkins.GitLabPushTrigger;
-import com.google.common.base.Joiner;
-import com.google.common.base.Splitter;
+import javax.servlet.FilterChain;
+import javax.servlet.ServletException;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  *
@@ -255,6 +246,8 @@ public class GitLabWebHook implements UnprotectedRootAction {
         //TODO: add status of pending when we figure it out.
         if(mainBuild.isBuilding()) {
             object.put("status", "running");
+        }else if(res == Result.ABORTED) {
+            object.put("status", "canceled");
         }else if(res == Result.SUCCESS) {
             object.put("status", "success");
         }else {
@@ -440,14 +433,14 @@ public class GitLabWebHook implements UnprotectedRootAction {
 									+ mr.getSourceBranch() + "\n target: "
 									+ mr.getTargetBranch() + "\n state: "
 									+ mr.getState() + "\n assign: "
-									+ mr.getAssignee().getName() + "\n author: "
-									+ mr.getAuthor().getName() + "\n id: "
+									+ (mr.getAssignee() != null ? mr.getAssignee().getName() : "") + "\n author: "
+									+ (mr.getAuthor() != null ? mr.getAuthor().getName() : "") + "\n id: "
 									+ mr.getId() + "\n iid: "
                                     + mr.getIid() + "\n last commit: "
                                     + lastCommit.getId() + "\n\n");
 					GitLabMergeRequest newReq = new GitLabMergeRequest();
 					newReq.setObject_kind("merge_request");
-					newReq.setObjectAttribute(new GitLabMergeRequest.ObjectAttributes());
+					newReq.setObjectAttribute(new ObjectAttributes());
 					if (mr.getAssignee() != null)
 						newReq.getObjectAttribute().setAssignee(mr.getAssignee());
 					if (mr.getAuthor() != null)
@@ -525,12 +518,12 @@ public class GitLabWebHook implements UnprotectedRootAction {
             if (trigger == null) {
                 return;
             }
-            
+
             if(trigger.getCiSkip() && request.getObjectAttribute().getDescription().contains("[ci-skip]")) {
                 LOGGER.log(Level.INFO, "Skipping MR " + request.getObjectAttribute().getTitle() + " due to ci-skip.");
                 return;
             }
-            
+
             trigger.onPost(request);
         } finally {
             SecurityContextHolder.getContext().setAuthentication(old);

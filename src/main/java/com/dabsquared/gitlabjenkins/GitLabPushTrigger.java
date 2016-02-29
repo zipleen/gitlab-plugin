@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 
 import jenkins.model.Jenkins;
 import jenkins.model.ParameterizedJobMixIn;
@@ -46,7 +47,6 @@ import net.sf.json.JSONObject;
 import org.apache.commons.lang.StringUtils;
 import org.eclipse.jgit.transport.RemoteConfig;
 import org.eclipse.jgit.transport.URIish;
-import org.gitlab.api.models.GitlabBranch;
 import org.gitlab.api.models.GitlabProject;
 import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
@@ -55,6 +55,7 @@ import org.kohsuke.stapler.StaplerRequest;
 import org.springframework.util.AntPathMatcher;
 
 import com.google.common.base.Joiner;
+import com.google.common.base.Objects;
 import com.google.common.base.Splitter;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Lists;
@@ -85,14 +86,18 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
     private boolean addNoteOnMergeRequest = true;
     private boolean addCiMessage = false;
     private boolean addVoteOnMergeRequest = true;
-    private boolean allowAllBranches = false;
+    private transient boolean allowAllBranches = false;
+    private final String branchFilterName;
     private final String includeBranchesSpec;
     private final String excludeBranchesSpec;
+    private final String targetBranchRegex;
     private boolean acceptMergeRequestOnSuccess = false;
 
     @DataBoundConstructor
-    public GitLabPushTrigger(boolean triggerOnPush, boolean triggerOnMergeRequest, String triggerOpenMergeRequestOnPush, boolean ciSkip, boolean setBuildDescription, boolean addNoteOnMergeRequest, boolean addCiMessage, boolean addVoteOnMergeRequest, boolean acceptMergeRequestOnSuccess, boolean allowAllBranches,
-            String includeBranchesSpec, String excludeBranchesSpec) {
+    public GitLabPushTrigger(boolean triggerOnPush, boolean triggerOnMergeRequest, String triggerOpenMergeRequestOnPush,
+                             boolean ciSkip, boolean setBuildDescription, boolean addNoteOnMergeRequest, boolean addCiMessage,
+                             boolean addVoteOnMergeRequest, boolean acceptMergeRequestOnSuccess, String branchFilterName,
+                             String includeBranchesSpec, String excludeBranchesSpec, String targetBranchRegex) {
         this.triggerOnPush = triggerOnPush;
         this.triggerOnMergeRequest = triggerOnMergeRequest;
         this.triggerOpenMergeRequestOnPush = triggerOpenMergeRequestOnPush;
@@ -101,9 +106,10 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
         this.addNoteOnMergeRequest = addNoteOnMergeRequest;
         this.addCiMessage = addCiMessage;
         this.addVoteOnMergeRequest = addVoteOnMergeRequest;
-        this.allowAllBranches = allowAllBranches;
+        this.branchFilterName = branchFilterName;
         this.includeBranchesSpec = includeBranchesSpec;
         this.excludeBranchesSpec = excludeBranchesSpec;
+        this.targetBranchRegex = targetBranchRegex;
         this.acceptMergeRequestOnSuccess = acceptMergeRequestOnSuccess;
     }
 
@@ -135,10 +141,6 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
         return acceptMergeRequestOnSuccess;
     }
 
-    public boolean getAllowAllBranches() {
-        return allowAllBranches;
-    }
-
     public boolean getAddCiMessage() {
         return addCiMessage;
     }
@@ -146,7 +148,19 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
     public boolean getCiSkip() {
         return ciSkip;
     }
-    private boolean isBranchAllowed(final String branchName) {
+
+    private boolean isAllowedByTargetBranchRegex(String branchName) {
+        final String regex = this.getTargetBranchRegex();
+
+        if (StringUtils.isEmpty(regex)) {
+            return true;
+        }
+        final Pattern pattern = Pattern.compile(regex);
+        return pattern.matcher(branchName).matches();
+    }
+
+    private boolean isAllowedByList(final String branchName) {
+
         final List<String> exclude = DescriptorImpl.splitBranchSpec(this.getExcludeBranchesSpec());
         final List<String> include = DescriptorImpl.splitBranchSpec(this.getIncludeBranchesSpec());
         if (exclude.isEmpty() && include.isEmpty()) {
@@ -168,6 +182,35 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
         return false;
     }
 
+    private boolean isBranchAllowed(final String branchName) {
+
+        final String branchFilterName = this.getBranchFilterName();
+        if (branchFilterName.isEmpty()) {
+            // no filter is applied, allow all branches
+            return true;
+        }
+
+        if (Objects.equal(branchFilterName, "NameBasedFilter")) {
+            return this.isAllowedByList(branchName);
+        }
+
+        if (Objects.equal(branchFilterName, "RegexBasedFilter")) {
+            return this.isAllowedByTargetBranchRegex(branchName);
+        }
+
+        return false;
+    }
+
+    // TODO use an enum instead of a String for this
+    public String getBranchFilterName() {
+        // TODO move this to a migration method during code cleanup
+        if (branchFilterName == null) {
+            return  allowAllBranches ? "" : "NameBasedFilter";
+        } else {
+            return branchFilterName;
+        }
+    }
+
     public String getIncludeBranchesSpec() {
         return this.includeBranchesSpec == null ? "" : this.includeBranchesSpec;
     }
@@ -175,6 +218,8 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
     public String getExcludeBranchesSpec() {
         return this.excludeBranchesSpec == null ? "" : this.excludeBranchesSpec;
     }
+
+    public String getTargetBranchRegex() { return this.targetBranchRegex == null ? "" : this.targetBranchRegex; }
 
     // executes when the Trigger receives a push request
     public void onPost(final GitLabPushRequest req) {
@@ -186,15 +231,16 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
             }
         };
 
-        if (triggerOnPush && (allowAllBranches || this.isBranchAllowed(this.getSourceBranch(req)))) {
+        if (triggerOnPush && this.isBranchAllowed(this.getSourceBranch(req))) {
+
             getDescriptor().queue.execute(new Runnable() {
 
                 public void run() {
-            		LOGGER.log(Level.INFO, "{0} triggered for push.", job.getName());
+                    LOGGER.log(Level.INFO, "{0} triggered for push.", job.getFullName());
 
             		String name = " #" + job.getNextBuildNumber();
             		GitLabPushCause cause = createGitLabPushCause(req);
-            		Action[] actions = createActions(req);
+                    Action[] actions = createActions(req);
 
                     boolean scheduled;
 
@@ -206,11 +252,13 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
                         scheduled = scheduledJob.scheduleBuild(cause);
                     }
 
-            		if (scheduled) {
-            			LOGGER.log(Level.INFO, "GitLab Push Request detected in {0}. Triggering {1}", new String[]{job.getName(), name});
-            		} else {
-            			LOGGER.log(Level.INFO, "GitLab Push Request detected in {0}. Job is already in the queue.", job.getName());
-            		}
+                    if (scheduled) {
+                        LOGGER.log(Level.INFO, "GitLab Push Request detected in {0}. Triggering {1}",
+                                new String[] { job.getFullName(), name });
+                    } else {
+                        LOGGER.log(Level.INFO, "GitLab Push Request detected in {0}. Job is already in the queue.",
+                                job.getFullName());
+                    }
 
                     if(addCiMessage) {
                         req.createCommitStatus(getDescriptor().getGitlab().instance(), "pending", Jenkins.getInstance().getRootUrl() + job.getUrl());
@@ -246,7 +294,7 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
                     values.put("gitlabMergeRequestId", new StringParameterValue("gitlabMergeRequestId", ""));
                     values.put("gitlabMergeRequestAssignee", new StringParameterValue("gitlabMergeRequestAssignee", ""));
 
-                    LOGGER.log(Level.INFO, "Trying to get name and URL for job: {0}", job.getName());
+                    LOGGER.log(Level.INFO, "Trying to get name and URL for job: {0}", job.getFullName());
                     String sourceRepoName = getDesc().getSourceRepoNameDefault(job);
                     String sourceRepoURL = getDesc().getSourceRepoURLDefault(job).toString();
 
@@ -279,7 +327,6 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
 
                     return actionsArray;
                 }
-
             });
         }
     }
@@ -313,10 +360,11 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
 
     // executes when the Trigger receives a merge request
     public void onPost(final GitLabMergeRequest req) {
-    	if (triggerOnMergeRequest) {
+        if (triggerOnMergeRequest && this.isBranchAllowed(req.getObjectAttribute().getTargetBranch())) {
+
     		getDescriptor().queue.execute(new Runnable() {
                 public void run() {
-	                LOGGER.log(Level.INFO, "{0} triggered for merge request.", job.getName());
+	                LOGGER.log(Level.INFO, "{0} triggered for merge request.", job.getFullName());
                   String name = " #" + job.getNextBuildNumber();
 
 	                GitLabMergeCause cause = createGitLabMergeCause(req);
@@ -338,9 +386,9 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
                     }
 
                     if (scheduled) {
-	                    LOGGER.log(Level.INFO, "GitLab Merge Request detected in {0}. Triggering {1}", new String[]{job.getName(), name});
+	                    LOGGER.log(Level.INFO, "GitLab Merge Request detected in {0}. Triggering {1}", new String[]{job.getFullName(), name});
 	                } else {
-	                    LOGGER.log(Level.INFO, "GitLab Merge Request detected in {0}. Job is already in the queue.", job.getName());
+	                    LOGGER.log(Level.INFO, "GitLab Merge Request detected in {0}. Job is already in the queue.", job.getFullName());
 	                }
 
                     if(addCiMessage) {
@@ -376,8 +424,7 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
                         values.put("gitlabMergeRequestAssignee", new StringParameterValue("gitlabMergeRequestAssignee", req.getObjectAttribute().getAssignee().getName()));
                     }
 
-                    LOGGER.log(Level.INFO, "Trying to get name and URL for job: {0}", job.getName());
-
+                    LOGGER.log(Level.INFO, "Trying to get name and URL for job: {0}", job.getFullName());
                     String sourceRepoName = getDesc().getSourceRepoNameDefault(job);
                     String sourceRepoURL = getDesc().getSourceRepoURLDefault(job).toString();
 
@@ -407,7 +454,7 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
 
 
             });
-    	}
+        }
     }
 
     private Map<String, ParameterValue> getDefaultParameters() {
@@ -455,7 +502,15 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
 
     private void onCompletedPushRequest(Run run, GitLabPushCause cause) {
         if(addCiMessage) {
-            cause.getPushRequest().createCommitStatus(this.getDescriptor().getGitlab().instance(), run.getResult()==Result.SUCCESS?"success":"failed", Jenkins.getInstance().getRootUrl() + run.getUrl());
+            String status;
+            if (run.getResult() == Result.ABORTED) {
+                status = "canceled";
+            }else if (run.getResult() == Result.SUCCESS) {
+                status = "success";
+            }else {
+                status = "failed";
+            }
+            cause.getPushRequest().createCommitStatus(this.getDescriptor().getGitlab().instance(), status, Jenkins.getInstance().getRootUrl() + run.getUrl());
         }
     }
 
@@ -522,7 +577,15 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
         }
 
         if(addCiMessage) {
-            cause.getMergeRequest().createCommitStatus(this.getDescriptor().getGitlab().instance(), run.getResult()==Result.SUCCESS?"success":"failed", Jenkins.getInstance().getRootUrl() + run.getUrl());
+            String status;
+            if (run.getResult() == Result.ABORTED) {
+                status = "canceled";
+            }else if (run.getResult() == Result.SUCCESS) {
+                status = "success";
+            }else {
+                status = "failed";
+            }
+            cause.getMergeRequest().createCommitStatus(this.getDescriptor().getGitlab().instance(), status, Jenkins.getInstance().getRootUrl() + run.getUrl());
         }
     }
 
@@ -642,8 +705,6 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
         private transient final SequentialExecutionQueue queue = new SequentialExecutionQueue(Jenkins.MasterComputer.threadPoolForRemoting);
         private transient GitLab gitlab;
 
-        private final Map<String, List<String>> projectBranches = new HashMap<String, List<String>>();
-
         public DescriptorImpl() {
         	load();
         }
@@ -705,10 +766,6 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
         }
 
         private List<String> getProjectBranches(final Job<?, ?> job) throws IOException, IllegalStateException {
-            if (projectBranches.containsKey(job.getName())){
-                return projectBranches.get(job.getName());
-            }
-
             if (!(job instanceof AbstractProject<?, ?>)) {
                 return Lists.newArrayList();
             }
@@ -719,36 +776,12 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
                 throw new IllegalStateException(Messages.GitLabPushTrigger_NoSourceRepository());
             }
 
-            try {
-                final List<String> branchNames = new ArrayList<String>();
-                if (!gitlabHostUrl.isEmpty()) {
-                    /* TODO until java-gitlab-api v1.1.5 is released,
-                     * cannot search projects by namespace/name
-                     * For now getting project id before getting project branches */
-                    final List<GitlabProject> projects = getGitlab().instance().getProjects();
-                    for (final GitlabProject gitlabProject : projects) {
-                        if (gitlabProject.getSshUrl().equalsIgnoreCase(sourceRepository.toString())
-                            || gitlabProject.getHttpUrl().equalsIgnoreCase(sourceRepository.toString())) {
-                            //Get all branches of project
-                            final List<GitlabBranch> branches = getGitlab().instance().getBranches(gitlabProject);
-                            for (final GitlabBranch branch : branches) {
-                                branchNames.add(branch.getName());
-                            }
-                            break;
-                        }
-                    }
-                }
-
-                projectBranches.put(job.getName(), branchNames);
-                return branchNames;
-            } catch (final Error error) {
-                /* WTF WTF WTF */
-                final Throwable cause = error.getCause();
-                if (cause instanceof IOException) {
-                    throw (IOException) cause;
-                } else {
-                    throw error;
-                }
+            if (!getGitlabHostUrl().isEmpty()) {
+                return GitLabProjectBranchesService.instance().getBranches(getGitlab(), sourceRepository.toString());
+            } else {
+                LOGGER.log(Level.WARNING, "getProjectBranches: gitlabHostUrl hasn't been configured globally. Job {0}.",
+                        job.getFullName());
+                return Lists.newArrayList();
             }
         }
 
@@ -778,8 +811,7 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
                 // show all suggestions for short strings
                 if (query.length() < 2){
                     values.addAll(branches);
-                }
-                else {
+                } else {
                     for (String branch : branches){
                       if (branch.toLowerCase().indexOf(query) > -1){
                         values.add(branch);
@@ -787,9 +819,9 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
                     }
                 }
             } catch (final IllegalStateException ex) {
-                /* no-op */
+                LOGGER.log(Level.FINEST, "Unexpected IllegalStateException. Please check the logs and your configuration.", ex);
             } catch (final IOException ex) {
-                /* no-op */
+                LOGGER.log(Level.FINEST, "Unexpected IllegalStateException. Please check the logs and your configuration.", ex);
             }
 
             return ac;
