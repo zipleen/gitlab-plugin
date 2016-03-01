@@ -289,7 +289,9 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
 
                     values.put("gitlabActionType", new StringParameterValue("gitlabActionType", "PUSH"));
                     values.put("gitlabUserName", new StringParameterValue("gitlabUserName", req.getCommits().get(0).getAuthor().getName()));
-                    values.put("gitlabUserEmail", new StringParameterValue("gitlabUserEmail", req.getCommits().get(0).getAuthor().getEmail()));
+                    if (req.getCommits().get(0).getAuthor().getEmail() != null) {
+                        values.put("gitlabUserEmail", new StringParameterValue("gitlabUserEmail", req.getCommits().get(0).getAuthor().getEmail()));
+                    }
                     values.put("gitlabMergeRequestTitle", new StringParameterValue("gitlabMergeRequestTitle", ""));
                     values.put("gitlabMergeRequestId", new StringParameterValue("gitlabMergeRequestId", ""));
                     values.put("gitlabMergeRequestAssignee", new StringParameterValue("gitlabMergeRequestAssignee", ""));
@@ -416,7 +418,9 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
                     values.put("gitlabActionType", new StringParameterValue("gitlabActionType", "MERGE"));
                     if (req.getObjectAttribute().getAuthor() != null) {
                         values.put("gitlabUserName", new StringParameterValue("gitlabUserName", req.getObjectAttribute().getAuthor().getName()));
-                        values.put("gitlabUserEmail", new StringParameterValue("gitlabUserEmail", req.getObjectAttribute().getAuthor().getEmail()));
+                        if (req.getObjectAttribute().getAuthor().getEmail() != null) {
+                            values.put("gitlabUserEmail", new StringParameterValue("gitlabUserEmail", req.getObjectAttribute().getAuthor().getEmail()));
+                        }
                     }
                     values.put("gitlabMergeRequestTitle", new StringParameterValue("gitlabMergeRequestTitle",  req.getObjectAttribute().getTitle()));
                     values.put("gitlabMergeRequestId", new StringParameterValue("gitlabMergeRequestId", req.getObjectAttribute().getIid().toString()));
@@ -542,7 +546,7 @@ public class GitLabPushTrigger extends Trigger<Job<?, ?>> {
                     .append("[").append("Jenkins " + buildUrl).append("](").append(buildUrl).append(")");
 
             try {
-                List<Action> buildActions = (List<Action>) abstractBuild.getAllActions();
+                List<Action> buildActions = (List<Action>) run.getAllActions();
                 for (Action buildAction : buildActions) {
                     if (buildAction instanceof HealthReportingAction) {
                         HealthReportingAction healthReportingAction = (HealthReportingAction) buildAction;
